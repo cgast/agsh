@@ -93,8 +93,9 @@ func main() {
 
 func handleDemo() error {
 	if len(os.Args) < 3 {
-		fmt.Println("Usage: agsh demo <number> [workspace-dir] [output-path]")
-		fmt.Println("  agsh demo 01 ./examples/demo/01-basic-pipeline/workspace ./output.md")
+		fmt.Println("Usage: agsh demo <number> [args...]")
+		fmt.Println("  agsh demo 01 [workspace-dir] [output-path]")
+		fmt.Println("  agsh demo 03 [input-csv]")
 		return nil
 	}
 	switch os.Args[2] {
@@ -108,6 +109,12 @@ func handleDemo() error {
 			outputPath = os.Args[4]
 		}
 		return runDemo01(workspaceDir, outputPath)
+	case "03":
+		inputCSV := "./examples/demo/03-verified-transform/workspace/team.csv"
+		if len(os.Args) >= 4 {
+			inputCSV = os.Args[3]
+		}
+		return runDemo03(inputCSV)
 	default:
 		return fmt.Errorf("unknown demo: %s", os.Args[2])
 	}

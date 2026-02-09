@@ -1,0 +1,68 @@
+apiVersion: agsh/v1
+kind: ProjectSpec
+
+meta:
+  name: "csv-to-table"
+  description: "Transform CSV data into a verified markdown table"
+  author: "demo"
+  created: "2025-02-09"
+  tags: ["demo", "verification", "transform", "checkpoint"]
+
+goal: |
+  Read a CSV file containing team member data, transform it into a
+  properly formatted markdown table, verify the output meets all
+  structural requirements, and write the result.
+
+constraints:
+  - "Preserve all data from the original CSV — no rows may be lost"
+  - "Output must be valid markdown"
+  - "Column order must match the CSV header order"
+
+guidelines:
+  - "Add a title header before the table"
+  - "Right-align numeric columns"
+  - "Sort rows by the first column (name) alphabetically"
+  - "Add a summary row at the bottom with totals for numeric columns"
+
+success_criteria:
+  - type: "not_empty"
+    target: "output"
+    message: "Output must not be empty"
+  - type: "contains"
+    target: "output"
+    expected: "|"
+    message: "Output must contain markdown table pipes"
+  - type: "contains"
+    target: "output"
+    expected: "---"
+    message: "Output must contain markdown table separator"
+  - type: "count_gte"
+    target: "output.lines"
+    expected: 8
+    message: "Output must have at least 8 lines (header + separator + 5 data rows + summary)"
+  - type: "matches_regex"
+    target: "output"
+    expected: "\\| Name\\s*\\|"
+    message: "Table must start with a Name column"
+  - type: "not_contains"
+    target: "output"
+    expected: ",,,"
+    message: "Output must not contain raw CSV artifacts"
+  - type: "llm_judge"
+    target: "output"
+    expected: "A well-formatted markdown table with all 5 team members, sorted alphabetically, with a totals row"
+    message: "Overall output quality check"
+
+allowed_commands:
+  - "fs:read"
+  - "fs:write"
+
+output:
+  path: "./team-table.md"
+  format: "markdown"
+
+params:
+  - name: "input_file"
+    type: "string"
+    default: "./workspace/team.csv"
+    description: "Path to the input CSV file"

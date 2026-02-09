@@ -13,6 +13,7 @@ import (
 	"github.com/cgast/agsh/pkg/events"
 	"github.com/cgast/agsh/pkg/platform"
 	"github.com/cgast/agsh/pkg/spec"
+	"github.com/cgast/agsh/pkg/verify"
 )
 
 // registryLister adapts platform.Registry to spec.CommandLister.
@@ -135,6 +136,29 @@ func approveExecution() bool {
 	return answer == "" || answer == "y" || answer == "yes"
 }
 
+// checkpointAdapter bridges verify.CheckpointManager + verify.CaptureSnapshot to pipeline.Checkpointer.
+type checkpointAdapter struct {
+	manager verify.CheckpointManager
+	store   agshctx.ContextStore
+	workdir string
+}
+
+func (c *checkpointAdapter) SaveCheckpoint(name string) error {
+	snap, err := verify.CaptureSnapshot(c.store, c.workdir)
+	if err != nil {
+		return fmt.Errorf("capture snapshot: %w", err)
+	}
+	return c.manager.Save(name, snap)
+}
+
+func (c *checkpointAdapter) RestoreCheckpoint(name string) error {
+	snap, err := c.manager.Restore(name)
+	if err != nil {
+		return err
+	}
+	return verify.RestoreSnapshot(c.store, snap)
+}
+
 // executePlan runs an ExecutionPlan through the pipeline engine.
 func executePlan(plan spec.ExecutionPlan, registry *platform.Registry, store agshctx.ContextStore, bus *events.MemoryBus) error {
 	executor := &registryExecutor{registry: registry}
@@ -144,10 +168,11 @@ func executePlan(plan spec.ExecutionPlan, registry *platform.Registry, store ags
 	pipelineSteps := make([]agshctx.PipelineStep, len(plan.Steps))
 	for i, step := range plan.Steps {
 		pipelineSteps[i] = agshctx.PipelineStep{
-			Command: step.Command,
-			Args:    step.Args,
-			Intent:  step.Intent,
-			OnError: step.OnError,
+			Command:          step.Command,
+			Args:             step.Args,
+			Intent:           step.Intent,
+			OnError:          step.OnError,
+			CheckpointBefore: step.CheckpointBefore,
 		}
 	}
 
@@ -155,11 +180,26 @@ func executePlan(plan spec.ExecutionPlan, registry *platform.Registry, store ags
 	store.Set(agshctx.ScopeProject, "spec_name", plan.Spec)
 	store.Set(agshctx.ScopeProject, "output_path", plan.Output.Path)
 
+	// Set up checkpoint manager.
+	cpDir := filepath.Join(os.TempDir(), "agsh-checkpoints", plan.Spec)
+	cpMgr, err := verify.NewFileCheckpointManager(cpDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not create checkpoint manager: %v\n", err)
+	}
+
 	pipeline := &agshctx.Pipeline{
 		Steps:    pipelineSteps,
 		Context:  store,
 		Executor: executor,
 		Events:   publisher,
+	}
+
+	if cpMgr != nil {
+		pipeline.Checkpointer = &checkpointAdapter{
+			manager: cpMgr,
+			store:   store,
+			workdir: "",
+		}
 	}
 
 	ctx := gocontext.Background()
@@ -178,6 +218,31 @@ func executePlan(plan spec.ExecutionPlan, registry *platform.Registry, store ags
 		fmt.Fprintf(os.Stderr, "Execution completed with errors\n")
 	}
 
+	// Verify success criteria against final output.
+	if len(plan.SuccessCriteria) > 0 {
+		fmt.Fprintf(os.Stderr, "\n=== Verification ===\n")
+		intent := specCriteriaToIntent(plan.SuccessCriteria)
+		engine := verify.NewEngine()
+		vResult, verifyErr := engine.Verify(result.Output, intent)
+		if verifyErr != nil {
+			return fmt.Errorf("verification error: %w", verifyErr)
+		}
+
+		for _, ar := range vResult.Results {
+			status := "PASS"
+			if !ar.Passed {
+				status = "FAIL"
+			}
+			fmt.Fprintf(os.Stderr, "  [%s] %s: %s\n", status, ar.Assertion.Type, ar.Message)
+		}
+
+		if !vResult.Passed {
+			return fmt.Errorf("verification failed: %d/%d assertions passed",
+				countPassed(vResult.Results), len(vResult.Results))
+		}
+		fmt.Fprintf(os.Stderr, "All %d assertions passed.\n", len(vResult.Results))
+	}
+
 	// Print the final output.
 	output, err := json.MarshalIndent(result.Output.Payload, "", "  ")
 	if err != nil {
@@ -187,6 +252,34 @@ func executePlan(plan spec.ExecutionPlan, registry *platform.Registry, store ags
 	}
 
 	return nil
+}
+
+// specCriteriaToIntent converts spec assertions to a verify.Intent.
+func specCriteriaToIntent(criteria []spec.Assertion) verify.Intent {
+	assertions := make([]verify.Assertion, len(criteria))
+	for i, c := range criteria {
+		assertions[i] = verify.Assertion{
+			Type:     c.Type,
+			Target:   c.Target,
+			Expected: c.Expected,
+			Message:  c.Message,
+		}
+	}
+	return verify.Intent{
+		Description: "success criteria",
+		Assertions:  assertions,
+	}
+}
+
+// countPassed counts the number of passed assertion results.
+func countPassed(results []verify.AssertionResult) int {
+	n := 0
+	for _, r := range results {
+		if r.Passed {
+			n++
+		}
+	}
+	return n
 }
 
 // validationMessages extracts messages from a ValidationResult.

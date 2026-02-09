@@ -301,6 +301,177 @@ func TestPipelineNoExecutor(t *testing.T) {
 	}
 }
 
+// testVerifier is a mock step verifier for testing.
+type testVerifier struct {
+	results map[int]bool // step index → pass/fail
+}
+
+func (v *testVerifier) VerifyStep(stepIndex int, envelope Envelope) (bool, string, error) {
+	passed, ok := v.results[stepIndex]
+	if !ok {
+		return true, "no assertion", nil
+	}
+	if passed {
+		return true, "verification passed", nil
+	}
+	return false, "verification failed", nil
+}
+
+// testCheckpointer is a mock checkpointer for testing.
+type testCheckpointer struct {
+	saved    []string
+	restored []string
+}
+
+func (c *testCheckpointer) SaveCheckpoint(name string) error {
+	c.saved = append(c.saved, name)
+	return nil
+}
+
+func (c *testCheckpointer) RestoreCheckpoint(name string) error {
+	c.restored = append(c.restored, name)
+	return nil
+}
+
+func TestPipelineVerification(t *testing.T) {
+	exec := newTestExecutor()
+	exec.Register("step1", func(_ gocontext.Context, _ Envelope, _ ContextStore) (Envelope, error) {
+		return NewEnvelope("output1", "text/plain", "step1"), nil
+	})
+	exec.Register("step2", func(_ gocontext.Context, input Envelope, _ ContextStore) (Envelope, error) {
+		return NewEnvelope("output2", "text/plain", "step2"), nil
+	})
+
+	verifier := &testVerifier{results: map[int]bool{0: true, 1: true}}
+
+	p := &Pipeline{
+		Steps: []PipelineStep{
+			{Command: "step1", Intent: "produce output1"},
+			{Command: "step2", Intent: "produce output2"},
+		},
+		Executor: exec,
+		Verifier: verifier,
+	}
+
+	result, err := p.Run(gocontext.Background(), NewEnvelope(nil, "", ""))
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if !result.Success {
+		t.Error("expected success")
+	}
+	for _, sr := range result.Steps {
+		if sr.VerifyPassed == nil {
+			t.Error("expected VerifyPassed to be set")
+		} else if !*sr.VerifyPassed {
+			t.Error("expected verification to pass")
+		}
+	}
+}
+
+func TestPipelineVerificationFails(t *testing.T) {
+	exec := newTestExecutor()
+	exec.Register("step1", func(_ gocontext.Context, _ Envelope, _ ContextStore) (Envelope, error) {
+		return NewEnvelope("bad output", "text/plain", "step1"), nil
+	})
+	exec.Register("step2", func(_ gocontext.Context, _ Envelope, _ ContextStore) (Envelope, error) {
+		return NewEnvelope("should not reach", "text/plain", "step2"), nil
+	})
+
+	verifier := &testVerifier{results: map[int]bool{0: false}}
+
+	p := &Pipeline{
+		Steps: []PipelineStep{
+			{Command: "step1", Intent: "produce good output"},
+			{Command: "step2"},
+		},
+		Executor: exec,
+		Verifier: verifier,
+	}
+
+	result, err := p.Run(gocontext.Background(), NewEnvelope(nil, "", ""))
+	if err == nil {
+		t.Fatal("expected error from verification failure")
+	}
+	if result.Success {
+		t.Error("expected failure")
+	}
+	if len(result.Steps) != 1 {
+		t.Errorf("expected 1 step result, got %d", len(result.Steps))
+	}
+	if result.Steps[0].Status != "verify_failed" {
+		t.Errorf("expected status 'verify_failed', got %s", result.Steps[0].Status)
+	}
+}
+
+func TestPipelineVerificationSkip(t *testing.T) {
+	exec := newTestExecutor()
+	exec.Register("step1", func(_ gocontext.Context, _ Envelope, _ ContextStore) (Envelope, error) {
+		return NewEnvelope("bad", "text/plain", "step1"), nil
+	})
+	exec.Register("step2", func(_ gocontext.Context, _ Envelope, _ ContextStore) (Envelope, error) {
+		return NewEnvelope("good", "text/plain", "step2"), nil
+	})
+
+	verifier := &testVerifier{results: map[int]bool{0: false, 1: true}}
+
+	p := &Pipeline{
+		Steps: []PipelineStep{
+			{Command: "step1", OnError: "skip"},
+			{Command: "step2"},
+		},
+		Executor: exec,
+		Verifier: verifier,
+	}
+
+	result, err := p.Run(gocontext.Background(), NewEnvelope(nil, "", ""))
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if !result.Success {
+		t.Error("expected success with skip on verify failure")
+	}
+}
+
+func TestPipelineCheckpointing(t *testing.T) {
+	exec := newTestExecutor()
+	exec.Register("read-cmd", func(_ gocontext.Context, _ Envelope, _ ContextStore) (Envelope, error) {
+		return NewEnvelope("data", "text/plain", "read"), nil
+	})
+	exec.Register("write-cmd", func(_ gocontext.Context, input Envelope, _ ContextStore) (Envelope, error) {
+		return NewEnvelope("written", "text/plain", "write"), nil
+	})
+
+	cp := &testCheckpointer{}
+
+	p := &Pipeline{
+		Steps: []PipelineStep{
+			{Command: "read-cmd"},
+			{Command: "write-cmd", CheckpointBefore: true},
+		},
+		Executor:     exec,
+		Checkpointer: cp,
+	}
+
+	result, err := p.Run(gocontext.Background(), NewEnvelope(nil, "", ""))
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if !result.Success {
+		t.Error("expected success")
+	}
+	if len(cp.saved) != 1 {
+		t.Errorf("expected 1 checkpoint saved, got %d", len(cp.saved))
+	}
+	if cp.saved[0] != "step-1-write-cmd" {
+		t.Errorf("checkpoint name = %q, want %q", cp.saved[0], "step-1-write-cmd")
+	}
+	// The step with checkpoint should record the checkpoint name.
+	if result.Steps[1].CheckpointSaved != "step-1-write-cmd" {
+		t.Errorf("CheckpointSaved = %q", result.Steps[1].CheckpointSaved)
+	}
+}
+
 func TestPipelineEmptySteps(t *testing.T) {
 	exec := newTestExecutor()
 
