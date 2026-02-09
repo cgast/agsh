@@ -1,0 +1,51 @@
+apiVersion: agsh/v1
+kind: ProjectSpec
+
+meta:
+  name: "deploy-pipeline"
+  description: "Automated deployment pipeline with verification"
+  author: "{{author}}"
+  created: "{{date}}"
+  tags: ["deploy", "pipeline", "automation"]
+
+goal: |
+  Execute a deployment pipeline: verify prerequisites, build artifacts,
+  deploy to the target environment, and verify the deployment succeeded.
+
+constraints:
+  - "Must checkpoint before any destructive operation"
+  - "Must verify each step before proceeding"
+  - "Must complete within 300 seconds"
+
+guidelines:
+  - "Run health checks after deployment"
+  - "Include rollback instructions in the report"
+  - "Log all actions for audit trail"
+
+success_criteria:
+  - type: "not_empty"
+    target: "output"
+    message: "Deployment report must not be empty"
+  - type: "contains"
+    target: "output"
+    expected: "deployed"
+    message: "Report must confirm deployment"
+
+allowed_commands:
+  - "fs:*"
+  - "http:get"
+  - "http:post"
+
+output:
+  path: "./deploy-report-{{date}}.md"
+  format: "markdown"
+
+params:
+  - name: "environment"
+    type: "string"
+    default: "staging"
+    description: "Target environment (staging, production)"
+  - name: "author"
+    type: "string"
+    default: "user"
+    description: "Author name for the spec"

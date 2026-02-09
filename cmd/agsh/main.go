@@ -15,13 +15,28 @@ import (
 )
 
 func main() {
-	// Check for demo mode.
-	if len(os.Args) >= 2 && os.Args[1] == "demo" {
-		if err := handleDemo(); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
+	// Check for subcommands that don't need full initialization.
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "demo":
+			if err := handleDemo(); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "init":
+			if err := handleInit(); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		case "validate":
+			if err := handleValidate(); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
 		}
-		return
 	}
 
 	mode := detectMode()
@@ -54,6 +69,15 @@ func main() {
 		os.Exit(1)
 	}
 	defer store.Close()
+
+	// Handle subcommands that need full initialization.
+	if len(os.Args) >= 2 && os.Args[1] == "run" {
+		if err := handleRun(registry, store, bus); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	switch mode {
 	case "interactive":

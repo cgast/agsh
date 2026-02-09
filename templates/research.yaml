@@ -1,0 +1,53 @@
+apiVersion: agsh/v1
+kind: ProjectSpec
+
+meta:
+  name: "research"
+  description: "Research a topic and compile findings into a report"
+  author: "{{author}}"
+  created: "{{date}}"
+  tags: ["research", "analysis", "report"]
+
+goal: |
+  Research the specified topic by gathering information from available
+  sources, analyze the findings, and produce a structured report with
+  key insights and recommendations.
+
+constraints:
+  - "Only use allowed data sources"
+  - "Must cite sources for factual claims"
+  - "Must complete within 120 seconds"
+
+guidelines:
+  - "Start with an executive summary"
+  - "Organize findings by theme or subtopic"
+  - "Include pros/cons or tradeoff analysis where relevant"
+  - "End with actionable recommendations"
+
+success_criteria:
+  - type: "not_empty"
+    target: "output"
+    message: "Report must not be empty"
+  - type: "contains"
+    target: "output"
+    expected: "## "
+    message: "Report must contain section headers"
+
+allowed_commands:
+  - "http:get"
+  - "fs:read"
+  - "fs:write"
+
+output:
+  path: "./research-{{date}}.md"
+  format: "markdown"
+
+params:
+  - name: "topic"
+    type: "string"
+    default: ""
+    description: "The topic to research"
+  - name: "author"
+    type: "string"
+    default: "user"
+    description: "Author name for the spec"

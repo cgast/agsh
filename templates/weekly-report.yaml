@@ -1,0 +1,53 @@
+apiVersion: agsh/v1
+kind: ProjectSpec
+
+meta:
+  name: "weekly-report"
+  description: "Generate a weekly summary of GitHub activity across repos"
+  author: "{{author}}"
+  created: "{{date}}"
+  tags: ["reporting", "github", "weekly"]
+
+goal: |
+  Generate a markdown report summarizing all GitHub activity across
+  the authenticated user's repositories for the past N days. Include
+  PRs, issues, and notable commits.
+
+constraints:
+  - "Only include repos owned by the authenticated user"
+  - "Do not create, modify, or delete any GitHub resources"
+  - "Output must be a single markdown file"
+  - "Must complete within 60 seconds"
+
+guidelines:
+  - "Group activity by repository, then by type (PRs, issues, commits)"
+  - "Keep summaries to 1-2 sentences per item"
+  - "Include links to relevant GitHub pages"
+  - "Flag any PRs open longer than 7 days"
+
+success_criteria:
+  - type: "not_empty"
+    target: "output"
+    message: "Report must not be empty"
+  - type: "contains"
+    target: "output"
+    expected: "## "
+    message: "Report must contain markdown headers"
+
+allowed_commands:
+  - "github:*"
+  - "fs:write"
+
+output:
+  path: "./reports/weekly-{{date}}.md"
+  format: "markdown"
+
+params:
+  - name: "date_range_days"
+    type: "integer"
+    default: 7
+    description: "How many days back to look"
+  - name: "author"
+    type: "string"
+    default: "user"
+    description: "Author name for the spec"

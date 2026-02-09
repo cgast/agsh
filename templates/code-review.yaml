@@ -1,0 +1,52 @@
+apiVersion: agsh/v1
+kind: ProjectSpec
+
+meta:
+  name: "code-review"
+  description: "Review code changes and produce a summary of findings"
+  author: "{{author}}"
+  created: "{{date}}"
+  tags: ["code-review", "analysis"]
+
+goal: |
+  Review the specified code files or recent changes, identify potential
+  issues (bugs, style violations, security concerns), and produce a
+  structured review report.
+
+constraints:
+  - "Read-only — do not modify any source files"
+  - "Must complete within 60 seconds"
+
+guidelines:
+  - "Group findings by severity: critical, warning, info"
+  - "Include file path and line number for each finding"
+  - "Suggest specific fixes where possible"
+  - "Note positive patterns worth keeping"
+
+success_criteria:
+  - type: "not_empty"
+    target: "output"
+    message: "Review must not be empty"
+  - type: "contains"
+    target: "output"
+    expected: "##"
+    message: "Review must contain section headers"
+
+allowed_commands:
+  - "fs:list"
+  - "fs:read"
+  - "fs:write"
+
+output:
+  path: "./review-{{date}}.md"
+  format: "markdown"
+
+params:
+  - name: "path"
+    type: "string"
+    default: "./src"
+    description: "Directory or file to review"
+  - name: "author"
+    type: "string"
+    default: "user"
+    description: "Author name for the spec"
