@@ -1,0 +1,37 @@
+apiVersion: agsh/v1
+kind: ProjectSpec
+
+meta:
+  name: "heading-counter"
+  description: "Count markdown headings across files and produce a summary"
+  author: "demo"
+  created: "2025-02-09"
+  tags: ["demo", "basic", "filesystem"]
+
+goal: |
+  Scan all markdown files in the workspace directory, extract headings
+  (lines starting with #), count them per file, and write a summary
+  report to output.md.
+
+constraints:
+  - "Read-only access to workspace files (only write output.md)"
+  - "Must complete within 10 seconds"
+
+guidelines:
+  - "Summary should list each file with its heading count"
+  - "Sort files alphabetically"
+  - "Include total heading count at the bottom"
+
+success_criteria:
+  - type: "not_empty"
+    target: "output"
+    message: "Summary must not be empty"
+
+allowed_commands:
+  - "fs:*"
+
+output:
+  path: "./output.md"
+  format: "markdown"
+
+params: []

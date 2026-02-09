@@ -12,6 +12,15 @@ import (
 )
 
 func main() {
+	// Check for demo mode.
+	if len(os.Args) >= 2 && os.Args[1] == "demo" {
+		if err := handleDemo(); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	mode := detectMode()
 
 	// Initialize core components.
@@ -37,6 +46,28 @@ func main() {
 	default:
 		fmt.Fprintf(os.Stderr, "unknown mode: %s\n", mode)
 		os.Exit(1)
+	}
+}
+
+func handleDemo() error {
+	if len(os.Args) < 3 {
+		fmt.Println("Usage: agsh demo <number> [workspace-dir] [output-path]")
+		fmt.Println("  agsh demo 01 ./examples/demo/01-basic-pipeline/workspace ./output.md")
+		return nil
+	}
+	switch os.Args[2] {
+	case "01":
+		workspaceDir := "./examples/demo/01-basic-pipeline/workspace"
+		outputPath := "./examples/demo/01-basic-pipeline/output.md"
+		if len(os.Args) >= 4 {
+			workspaceDir = os.Args[3]
+		}
+		if len(os.Args) >= 5 {
+			outputPath = os.Args[4]
+		}
+		return runDemo01(workspaceDir, outputPath)
+	default:
+		return fmt.Errorf("unknown demo: %s", os.Args[2])
 	}
 }
 
