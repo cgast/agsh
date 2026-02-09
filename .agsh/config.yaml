@@ -1,0 +1,25 @@
+mode: interactive
+log_level: info
+
+sandbox:
+  workdir: /workspace
+  allowed_paths:
+    - /workspace
+    - /tmp
+  denied_paths:
+    - /etc
+    - /usr
+  max_file_size: 10MB
+
+approval:
+  mode: plan
+  timeout: 300
+
+verify:
+  fail_fast: true
+  llm_judge_endpoint: ""
+  llm_judge_model: ""
+
+history:
+  max_entries: 10000
+  persist: true

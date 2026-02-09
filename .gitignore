@@ -1,0 +1,4 @@
+bin/
+*.db
+*.bolt
+.agsh/platforms.yaml
