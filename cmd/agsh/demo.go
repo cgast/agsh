@@ -10,6 +10,7 @@ import (
 
 	agshctx "github.com/cgast/agsh/pkg/context"
 	"github.com/cgast/agsh/pkg/events"
+	"github.com/cgast/agsh/internal/config"
 	"github.com/cgast/agsh/pkg/platform"
 	"github.com/cgast/agsh/pkg/platform/fs"
 )
@@ -19,7 +20,7 @@ import (
 func runDemo01(workspaceDir, outputPath string) error {
 	bus := events.NewMemoryBus()
 	registry := platform.NewRegistry()
-	registerCommands(registry)
+	registerCommands(registry, config.PlatformConfig{})
 
 	dbPath := filepath.Join(os.TempDir(), "agsh-demo01.db")
 	defer os.Remove(dbPath)

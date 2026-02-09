@@ -5,10 +5,13 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/cgast/agsh/internal/config"
 	agshctx "github.com/cgast/agsh/pkg/context"
 	"github.com/cgast/agsh/pkg/events"
 	"github.com/cgast/agsh/pkg/platform"
 	"github.com/cgast/agsh/pkg/platform/fs"
+	ghplatform "github.com/cgast/agsh/pkg/platform/github"
+	httpplatform "github.com/cgast/agsh/pkg/platform/http"
 )
 
 func main() {
@@ -23,10 +26,25 @@ func main() {
 
 	mode := detectMode()
 
+	// Load configuration.
+	cfg, err := config.LoadConfig(configPath())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: loading config: %v\n", err)
+	}
+	platCfg, err := config.LoadPlatformConfig(platformConfigPath())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: loading platform config: %v\n", err)
+	}
+
+	// Override mode from config if not set via flag/env.
+	if mode == "" && cfg.Mode != "" {
+		mode = cfg.Mode
+	}
+
 	// Initialize core components.
 	bus := events.NewMemoryBus()
 	registry := platform.NewRegistry()
-	registerCommands(registry)
+	registerCommands(registry, platCfg)
 
 	// Initialize context store.
 	dbPath := contextStorePath()
@@ -99,10 +117,35 @@ func detectMode() string {
 	return "interactive"
 }
 
-func registerCommands(registry *platform.Registry) {
+func registerCommands(registry *platform.Registry, platCfg config.PlatformConfig) {
+	// Built-in filesystem commands.
 	registry.Register(&fs.ListCommand{})
 	registry.Register(&fs.ReadCommand{})
 	registry.Register(&fs.WriteCommand{})
+
+	// GitHub commands (only if token is configured).
+	if platCfg.GitHub.Token != "" {
+		ghClient, err := ghplatform.NewClient(platCfg.GitHub.Token)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: github client init: %v\n", err)
+		} else {
+			registry.Register(ghplatform.NewRepoInfoCommand(ghClient))
+			registry.Register(ghplatform.NewPRListCommand(ghClient))
+			registry.Register(ghplatform.NewIssueCreateCommand(ghClient))
+		}
+	}
+
+	// HTTP commands (with domain allowlisting).
+	registry.Register(httpplatform.NewGetCommand(platCfg.HTTP.AllowedDomains))
+	registry.Register(httpplatform.NewPostCommand(platCfg.HTTP.AllowedDomains))
+}
+
+func configPath() string {
+	return filepath.Join(".agsh", "config.yaml")
+}
+
+func platformConfigPath() string {
+	return filepath.Join(".agsh", "platforms.yaml")
 }
 
 func contextStorePath() string {
