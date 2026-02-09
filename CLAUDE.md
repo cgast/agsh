@@ -12,6 +12,22 @@ agsh (Agent Shell) is a CLI runtime for AI agents written in Go. Read the full a
 
 These docs are the source of truth. If something is ambiguous, check the spec before improvising.
 
+## Task Workflow
+
+This project uses Claude Code Tasks for coordination. When starting a phase:
+
+1. Read the phase description in this file
+2. Create Tasks with dependencies using TaskCreate
+3. Work through tasks in dependency order
+4. Mark tasks complete as you go
+5. Run `go test ./...` before marking any implementation task complete
+
+When working in parallel sessions (via `CLAUDE_CODE_TASK_LIST_ID`):
+- Check TaskList() for available (pending, unowned, unblocked) tasks
+- Claim a task before starting work on it
+- Don't touch files owned by another session's active task
+- Commit after completing each task
+
 ## Project Conventions
 
 ### Code Style
@@ -22,8 +38,8 @@ These docs are the source of truth. If something is ambiguous, check the spec be
 - Tests alongside source files (`*_test.go`)
 
 ### Architecture Rules
-- **Three pillars are independent packages.** `pkg/context`, `pkg/platform`, `pkg/verify` must not import each other directly. They compose through shared types defined in their own packages.
-- **Shared types:** `pkg/context/envelope.go` defines the `Envelope` type used everywhere. Platform commands and verification engine both depend on it.
+- **Three pillars are independent packages.** `pkg/context`, `pkg/platform`, `pkg/verify` must not import each other directly. They compose through shared types.
+- **Shared types:** `pkg/context/envelope.go` defines the `Envelope` type used everywhere.
 - **No circular imports.** If two packages need to talk, introduce an interface in the consumer.
 - **`internal/` is for implementation details** that shouldn't be imported outside this module.
 - **`cmd/agsh/` is thin.** It wires things together but contains minimal logic.
@@ -42,76 +58,73 @@ These docs are the source of truth. If something is ambiguous, check the spec be
 Follow the structure in `docs/architecture.md` Section 6 exactly. Don't reorganize.
 
 ### Testing
-- Every package needs tests. At minimum: core types serialize/deserialize, interfaces have at least one integration test.
-- Use table-driven tests where appropriate.
-- Demo specs in `examples/demo/` serve as integration test fixtures.
+- Every package needs tests
+- Use table-driven tests where appropriate
+- Demo specs in `examples/demo/` serve as integration test fixtures
 
 ### Git
-- Commit after each logical unit of work (one package, one feature)
+- Commit after each logical unit of work
 - Commit messages: `feat(context): implement Envelope type and serialization`
 - Prefix: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`
 
 ## Build & Run
 
 ```bash
-# Build
 go build -o bin/agsh ./cmd/agsh
-
-# Test
 go test ./...
-
-# Docker
 docker build -f docker/Dockerfile -t agsh .
 docker-compose -f docker/docker-compose.yaml up
-
-# Run
-./bin/agsh                          # interactive mode
-./bin/agsh --mode=agent             # agent mode (JSON-RPC stdin/stdout)
-./bin/agsh run <spec.yaml>          # run a project spec
-./bin/agsh --inspector              # enable web inspector
 ```
 
-## Current Build Phase
+## Phase Definitions
 
-Check which phase we're in and what's been completed:
+### Phase 1: Foundation ✅ COMPLETE
 
-### Phase 1: Foundation
-- [x] Go module initialized, project structure scaffolded
-- [x] `pkg/context/envelope.go` — Envelope type + serialization
-- [x] `pkg/context/store.go` — ContextStore interface + bbolt implementation
-- [x] `pkg/context/pipeline.go` — Pipeline definition + execution
-- [x] `pkg/platform/command.go` — PlatformCommand interface
-- [x] `pkg/platform/registry.go` — Command registry
-- [x] `pkg/platform/fs/` — fs:list, fs:read, fs:write commands
-- [x] `cmd/agsh/main.go` — Entrypoint with mode detection
-- [x] `cmd/agsh/repl.go` — Basic interactive REPL
-- [x] `pkg/events/` — EventBus (wire in from Phase 1 for inspector later)
-- [x] `docker/Dockerfile` + `docker-compose.yaml`
-- [x] Demo 01 runs end-to-end
+### Phase 2: Platforms + Specs ✅ COMPLETE
 
-### Phase 2: Platforms + Specs
-- [ ] `pkg/platform/github/` — repo:info, pr:list, issue:create
-- [ ] `pkg/platform/http/` — get, post with domain allowlisting
-- [ ] `internal/config/` — YAML config loading (runtime + platforms)
-- [ ] `pkg/spec/` — Spec types, loader, validator, planner
-- [ ] `cmd/agsh/` — `run` and `init` subcommands
-- [ ] `templates/` — At least 2 spec templates
-- [ ] Demo 02 runs end-to-end
+Create these as Tasks with dependencies. T1-T3 and T5 can run in parallel.
 
-### Phase 3: Verification
-- [ ] `pkg/verify/intent.go` — Intent + Assertion types
-- [ ] `pkg/verify/engine.go` — VerificationEngine
-- [ ] `pkg/verify/assertions.go` — Built-in assertion implementations
-- [ ] `pkg/verify/checkpoint.go` — CheckpointManager
-- [ ] Verification wired into pipeline execution
-- [ ] Success criteria from specs feed into verification
-- [ ] Demo 03 runs (both success and failure scenarios)
+| Task | Description | Blocked By |
+|------|-------------|------------|
+| T1 | `pkg/platform/github/` — repo:info, pr:list, issue:create | — |
+| T2 | `pkg/platform/http/` — get, post with domain allowlisting | — |
+| T3 | `internal/config/` — YAML config loading, platform credentials | — |
+| T4 | Wire platform config into Registry, register all commands | T1, T2, T3 |
+| T5 | `pkg/spec/spec.go` — ProjectSpec types | — |
+| T6 | `pkg/spec/loader.go` — YAML loading + variable interpolation | T5 |
+| T7 | `pkg/spec/validator.go` — spec validation | T5 |
+| T8 | `pkg/spec/planner.go` — spec → execution plan | T5, T6, T7 |
+| T9 | `run` and `init` subcommands in cmd/agsh | T4, T8 |
+| T10 | Create templates/ + Demo 02 spec and workspace | T9 |
+| T11 | Review: verify Phase 2 against docs/architecture.md | T10 |
+
+### Phase 3: Verification ✅ COMPLETE
+
+| Task | Description | Blocked By |
+|------|-------------|------------|
+| T1 | `pkg/verify/intent.go` + `assertions.go` — types + built-in assertions | — |
+| T2 | `pkg/verify/engine.go` — VerificationEngine | T1 |
+| T3 | `llm_judge` assertion type (optional, skip if no endpoint) | T2 |
+| T4 | `pkg/verify/checkpoint.go` — CheckpointManager | — |
+| T5 | Wire verification into pipeline execution | T2, T4 |
+| T6 | Wire success_criteria from specs into verification | T5 |
+| T7 | Demo 03 — both success and failure paths | T6 |
+| T8 | Review: verify Phase 3 against docs/architecture.md | T7 |
 
 ### Phase 4: Agent Mode + Inspector
-- [ ] `pkg/protocol/` — JSON-RPC message types + handler
-- [ ] `cmd/agsh/agent.go` — Agent mode (JSON-RPC over stdin/stdout)
-- [ ] `project.*` methods in protocol (load, plan, approve, reject, run)
-- [ ] `internal/inspector/` — HTTP server + WebSocket + embedded UI
-- [ ] Approval flow works end-to-end
-- [ ] Demo 04 runs with an LLM connected
-- [ ] Inspector shows live pipeline progress
+
+T1-T5 (protocol) and T6-T8 (inspector) can run in parallel.
+
+| Task | Description | Blocked By |
+|------|-------------|------------|
+| T1 | `pkg/protocol/jsonrpc.go` — JSON-RPC types | — |
+| T2 | `pkg/protocol/handler.go` — method routing | T1 |
+| T3 | `cmd/agsh/agent.go` — agent mode loop | T2 |
+| T4 | `project.*` methods — load, plan, approve, reject, run | T3 |
+| T5 | Approval flow end-to-end | T4 |
+| T6 | `pkg/events/` — ensure all runtime events are emitted | — |
+| T7 | `internal/inspector/server.go` — HTTP + WebSocket server | T6 |
+| T8 | `internal/inspector/ui/` — frontend | T7 |
+| T9 | Wire inspector into main.go with --inspector flag | T7, T8 |
+| T10 | Demo 04 — full agent autonomy test | T5, T9 |
+| T11 | Review: verify Phase 4 against spec | T10 |
