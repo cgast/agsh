@@ -1,0 +1,11 @@
+commits_last_30d: 47
+open_prs: 3
+merged_prs_last_30d: 12
+open_issues: 8
+closed_issues_last_30d: 15
+avg_pr_age_days: 2.5
+avg_issue_response_hours: 4.2
+contributors: 3
+last_commit_days_ago: 1
+stars: 142
+forks: 23

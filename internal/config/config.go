@@ -11,12 +11,19 @@ import (
 
 // Config represents the runtime configuration from .agsh/config.yaml.
 type Config struct {
-	Mode     string          `yaml:"mode"`
-	LogLevel string          `yaml:"log_level"`
-	Sandbox  SandboxConfig   `yaml:"sandbox"`
-	Approval ApprovalConfig  `yaml:"approval"`
-	Verify   VerifyConfig    `yaml:"verify"`
-	History  HistoryConfig   `yaml:"history"`
+	Mode      string          `yaml:"mode"`
+	LogLevel  string          `yaml:"log_level"`
+	Sandbox   SandboxConfig   `yaml:"sandbox"`
+	Approval  ApprovalConfig  `yaml:"approval"`
+	Verify    VerifyConfig    `yaml:"verify"`
+	History   HistoryConfig   `yaml:"history"`
+	Inspector InspectorConfig `yaml:"inspector"`
+}
+
+// InspectorConfig defines inspector GUI settings.
+type InspectorConfig struct {
+	Enabled bool `yaml:"enabled"`
+	Port    int  `yaml:"port"`
 }
 
 // SandboxConfig defines filesystem restrictions.

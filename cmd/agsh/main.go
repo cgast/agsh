@@ -4,14 +4,18 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 
 	"github.com/cgast/agsh/internal/config"
+	"github.com/cgast/agsh/internal/inspector"
 	agshctx "github.com/cgast/agsh/pkg/context"
 	"github.com/cgast/agsh/pkg/events"
 	"github.com/cgast/agsh/pkg/platform"
 	"github.com/cgast/agsh/pkg/platform/fs"
 	ghplatform "github.com/cgast/agsh/pkg/platform/github"
 	httpplatform "github.com/cgast/agsh/pkg/platform/http"
+	"github.com/cgast/agsh/pkg/verify"
 )
 
 func main() {
@@ -70,6 +74,16 @@ func main() {
 	}
 	defer store.Close()
 
+	// Start inspector if enabled via flag or config.
+	inspectorPort := detectInspectorPort(cfg)
+	if inspectorPort > 0 {
+		cpDir := filepath.Join(os.TempDir(), "agsh-checkpoints")
+		cpMgr, _ := verify.NewFileCheckpointManager(cpDir)
+		srv := inspector.New(bus, store, registry, cpMgr)
+		srv.StartAsync(inspectorPort)
+		fmt.Fprintf(os.Stderr, "Inspector running at http://localhost:%d\n", inspectorPort)
+	}
+
 	// Handle subcommands that need full initialization.
 	if len(os.Args) >= 2 && os.Args[1] == "run" {
 		if err := handleRun(registry, store, bus); err != nil {
@@ -83,8 +97,7 @@ func main() {
 	case "interactive":
 		runInteractiveREPL(registry, store, bus)
 	case "agent":
-		fmt.Fprintln(os.Stderr, "agent mode not yet implemented (Phase 4)")
-		os.Exit(1)
+		runAgentMode(registry, store, bus)
 	default:
 		fmt.Fprintf(os.Stderr, "unknown mode: %s\n", mode)
 		os.Exit(1)
@@ -96,6 +109,7 @@ func handleDemo() error {
 		fmt.Println("Usage: agsh demo <number> [args...]")
 		fmt.Println("  agsh demo 01 [workspace-dir] [output-path]")
 		fmt.Println("  agsh demo 03 [input-csv]")
+		fmt.Println("  agsh demo 04 [spec-path]")
 		return nil
 	}
 	switch os.Args[2] {
@@ -115,6 +129,12 @@ func handleDemo() error {
 			inputCSV = os.Args[3]
 		}
 		return runDemo03(inputCSV)
+	case "04":
+		specPath := "./examples/demo/04-agent-autonomy/local-spec.agsh.yaml"
+		if len(os.Args) >= 4 {
+			specPath = os.Args[3]
+		}
+		return runDemo04(specPath)
 	default:
 		return fmt.Errorf("unknown demo: %s", os.Args[2])
 	}
@@ -185,4 +205,49 @@ func contextStorePath() string {
 		return filepath.Join(".agsh", "context.db")
 	}
 	return filepath.Join(os.TempDir(), "agsh-context.db")
+}
+
+// detectInspectorPort parses --inspector and --inspector-port flags.
+// Returns 0 if the inspector is disabled, or the port number to use.
+func detectInspectorPort(cfg config.Config) int {
+	const defaultPort = 4200
+
+	// Check for --no-inspector flag.
+	for _, arg := range os.Args[1:] {
+		if arg == "--no-inspector" {
+			return 0
+		}
+	}
+
+	// Check for --inspector or --inspector-port flag.
+	for _, arg := range os.Args[1:] {
+		if arg == "--inspector" {
+			return defaultPort
+		}
+		if strings.HasPrefix(arg, "--inspector-port=") {
+			portStr := strings.TrimPrefix(arg, "--inspector-port=")
+			if port, err := strconv.Atoi(portStr); err == nil && port > 0 {
+				return port
+			}
+		}
+	}
+
+	// Check AGSH_INSPECTOR env var.
+	if envVal := os.Getenv("AGSH_INSPECTOR"); envVal != "" {
+		if port, err := strconv.Atoi(envVal); err == nil && port > 0 {
+			return port
+		}
+		// "true" or any non-empty value enables on default port.
+		return defaultPort
+	}
+
+	// Check config file.
+	if cfg.Inspector.Enabled {
+		if cfg.Inspector.Port > 0 {
+			return cfg.Inspector.Port
+		}
+		return defaultPort
+	}
+
+	return 0
 }

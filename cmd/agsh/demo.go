@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	gocontext "context"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/cgast/agsh/internal/config"
 	"github.com/cgast/agsh/pkg/platform"
 	"github.com/cgast/agsh/pkg/platform/fs"
+	"github.com/cgast/agsh/pkg/protocol"
 	"github.com/cgast/agsh/pkg/verify"
 )
 
@@ -382,6 +384,331 @@ func runDemo03(inputCSV string) error {
 	fmt.Fprintf(os.Stderr, "=== Demo 03 Complete ===\n")
 
 	return nil
+}
+
+// runDemo04 exercises the full agent autonomy loop via JSON-RPC.
+// It simulates what an LLM orchestrator would do: discover commands, load a spec,
+// generate a plan, approve it, and execute — all through the protocol handler.
+func runDemo04(specPath string) error {
+	bus := events.NewMemoryBus()
+	registry := platform.NewRegistry()
+	registerCommands(registry, config.PlatformConfig{})
+
+	dbPath := filepath.Join(os.TempDir(), "agsh-demo04.db")
+	defer os.Remove(dbPath)
+
+	store, err := agshctx.NewBoltStore(dbPath)
+	if err != nil {
+		return fmt.Errorf("create store: %w", err)
+	}
+	defer store.Close()
+
+	// Subscribe to events for observability.
+	ch := bus.Subscribe()
+	defer bus.Unsubscribe(ch)
+	go func() {
+		for ev := range ch {
+			fmt.Fprintf(os.Stderr, "  [event] %s: %v\n", ev.Type, ev.Data)
+		}
+	}()
+
+	fmt.Fprintf(os.Stderr, "=== Demo 04: Agent Autonomy ===\n")
+	fmt.Fprintf(os.Stderr, "Spec: %s\n", specPath)
+	fmt.Fprintf(os.Stderr, "Simulating LLM orchestrator via JSON-RPC protocol handler...\n\n")
+
+	// Set up the protocol handler exactly as agent mode does.
+	handler := protocol.NewHandler()
+	state := &agentState{}
+
+	cpDir := filepath.Join(os.TempDir(), "agsh-demo04-checkpoints")
+	cpMgr, _ := verify.NewFileCheckpointManager(cpDir)
+
+	registerCoreMethods(handler, registry, store, bus, cpMgr)
+	registerProjectMethods(handler, registry, store, bus, state, cpMgr)
+
+	// Helper to send a JSON-RPC request and display the result.
+	reqID := 0
+	send := func(method string, params any) (json.RawMessage, error) {
+		reqID++
+		var rawParams json.RawMessage
+		if params != nil {
+			b, err := json.Marshal(params)
+			if err != nil {
+				return nil, fmt.Errorf("marshal params: %w", err)
+			}
+			rawParams = b
+		}
+
+		req := protocol.Request{
+			JSONRPC: "2.0",
+			ID:      reqID,
+			Method:  method,
+			Params:  rawParams,
+		}
+
+		fmt.Fprintf(os.Stderr, "Agent → %s", method)
+		if rawParams != nil {
+			compact := string(rawParams)
+			if len(compact) > 80 {
+				compact = compact[:77] + "..."
+			}
+			fmt.Fprintf(os.Stderr, " %s", compact)
+		}
+		fmt.Fprintf(os.Stderr, "\n")
+
+		resp := handler.Handle(req)
+
+		if resp.Error != nil {
+			fmt.Fprintf(os.Stderr, "  ← ERROR [%d]: %s\n\n", resp.Error.Code, resp.Error.Message)
+			return nil, fmt.Errorf("%s: %s", method, resp.Error.Message)
+		}
+
+		resultJSON, _ := json.Marshal(resp.Result)
+		summary := string(resultJSON)
+		if len(summary) > 120 {
+			summary = summary[:117] + "..."
+		}
+		fmt.Fprintf(os.Stderr, "  ← %s\n\n", summary)
+
+		return resultJSON, nil
+	}
+
+	// Step 1: Discover available commands.
+	fmt.Fprintf(os.Stderr, "--- Phase 1: Command Discovery ---\n")
+	result, err := send(protocol.MethodCommandsList, nil)
+	if err != nil {
+		return err
+	}
+
+	var cmds []protocol.CommandInfo
+	json.Unmarshal(result, &cmds)
+	fmt.Fprintf(os.Stderr, "  Agent observes %d available commands\n\n", len(cmds))
+
+	// Step 2: Load the project spec.
+	fmt.Fprintf(os.Stderr, "--- Phase 2: Load Project Spec ---\n")
+	_, err = send(protocol.MethodProjectLoad, map[string]string{"path": specPath})
+	if err != nil {
+		return err
+	}
+
+	// Step 3: Generate a plan.
+	fmt.Fprintf(os.Stderr, "--- Phase 3: Generate Plan ---\n")
+	planResult, err := send(protocol.MethodProjectPlan, nil)
+	if err != nil {
+		return err
+	}
+
+	var planInfo map[string]any
+	json.Unmarshal(planResult, &planInfo)
+	fmt.Fprintf(os.Stderr, "  Plan has %v steps, status: %v\n\n", planInfo["steps"], planInfo["status"])
+
+	// Step 4: Save a checkpoint before execution.
+	fmt.Fprintf(os.Stderr, "--- Phase 4: Save Pre-execution Checkpoint ---\n")
+	_, err = send(protocol.MethodCheckpointSave, map[string]string{"name": "pre-execution"})
+	if err != nil {
+		return err
+	}
+
+	// Step 5: Agent decides to execute steps individually (like a real LLM would).
+	// Instead of blindly approving, the agent rejects the auto-plan and executes
+	// with its own understanding of what args to provide.
+	fmt.Fprintf(os.Stderr, "--- Phase 5: Reject Auto-Plan, Execute Manually ---\n")
+	_, err = send(protocol.MethodProjectReject, map[string]string{
+		"feedback": "Auto-plan lacks proper args. Agent will execute steps manually.",
+	})
+	if err != nil {
+		return err
+	}
+
+	workspaceDir := filepath.Dir(specPath)
+	if workspaceDir == "." {
+		workspaceDir = "./examples/demo/04-agent-autonomy"
+	}
+	wsDir := filepath.Join(workspaceDir, "workspace")
+
+	// Step 5a: List workspace files.
+	fmt.Fprintf(os.Stderr, "--- Phase 5a: List Workspace Files ---\n")
+	_, err = send(protocol.MethodExecute, map[string]any{
+		"command": "fs:list",
+		"args":    map[string]any{"path": wsDir},
+		"intent":  "Discover workspace files for analysis",
+	})
+	if err != nil {
+		return err
+	}
+
+	// Step 5b: Read each workspace file.
+	fmt.Fprintf(os.Stderr, "--- Phase 5b: Read Workspace Files ---\n")
+	for _, name := range []string{"readme.md", "metrics.txt"} {
+		fpath := filepath.Join(wsDir, name)
+		result, err := send(protocol.MethodExecute, map[string]any{
+			"command": "fs:read",
+			"args":    map[string]any{"path": fpath},
+			"intent":  fmt.Sprintf("Read %s for analysis", name),
+		})
+		if err != nil {
+			return err
+		}
+
+		// Store in context (simulating what an LLM would do with the data).
+		var readResult map[string]any
+		json.Unmarshal(result, &readResult)
+		send(protocol.MethodContextSet, map[string]any{
+			"scope": "session",
+			"key":   "file_" + strings.ReplaceAll(name, ".", "_"),
+			"value": readResult,
+		})
+	}
+
+	// Step 6: Check execution history so far.
+	fmt.Fprintf(os.Stderr, "--- Phase 6: Review Execution History ---\n")
+	_, err = send(protocol.MethodHistory, nil)
+	if err != nil {
+		return err
+	}
+
+	// Step 7: Generate the health report from gathered data.
+	fmt.Fprintf(os.Stderr, "--- Phase 7: Generate & Write Health Report ---\n")
+
+	report := generateLocalHealthReport(workspaceDir, store)
+
+	// Save checkpoint before write.
+	_, err = send(protocol.MethodCheckpointSave, map[string]string{"name": "pre-write"})
+	if err != nil {
+		return err
+	}
+
+	// Write the report via execute with inline verification.
+	reportPath := filepath.Join(workspaceDir, "reports", "health-report.md")
+	_, err = send(protocol.MethodExecute, map[string]any{
+		"command": "fs:write",
+		"args": map[string]any{
+			"path":    reportPath,
+			"content": report,
+		},
+		"intent": "Write the health report",
+		"verify": []map[string]any{
+			{"type": "not_empty", "target": "output"},
+			{"type": "contains", "target": "output", "expected": "Health Score"},
+			{"type": "contains", "target": "output", "expected": "Recommendation"},
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	// Print the report.
+	fmt.Fprintf(os.Stderr, "\n=== Health Report ===\n")
+	fmt.Print(report)
+	fmt.Fprintf(os.Stderr, "\nWritten to: %s\n", reportPath)
+	fmt.Fprintf(os.Stderr, "=== Demo 04 Complete ===\n")
+
+	return nil
+}
+
+// generateLocalHealthReport builds a health report from workspace data.
+func generateLocalHealthReport(workspaceDir string, store agshctx.ContextStore) string {
+	// Read metrics from the workspace if available.
+	metricsPath := filepath.Join(workspaceDir, "workspace", "metrics.txt")
+	metrics := make(map[string]string)
+	if data, err := os.ReadFile(metricsPath); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			if k, v, ok := strings.Cut(line, ":"); ok {
+				metrics[strings.TrimSpace(k)] = strings.TrimSpace(v)
+			}
+		}
+	}
+
+	// Count workspace files.
+	readmePath := filepath.Join(workspaceDir, "workspace", "readme.md")
+	readmeContent := ""
+	if data, err := os.ReadFile(readmePath); err == nil {
+		readmeContent = string(data)
+	}
+
+	// Compute health score from metrics.
+	score := 85 // default
+	commits, _ := strconv.Atoi(metrics["commits_last_30d"])
+	openIssues, _ := strconv.Atoi(metrics["open_issues"])
+	contributors, _ := strconv.Atoi(metrics["contributors"])
+	lastCommitDays, _ := strconv.Atoi(metrics["last_commit_days_ago"])
+	stars, _ := strconv.Atoi(metrics["stars"])
+
+	if commits > 30 {
+		score += 5
+	}
+	if openIssues > 20 {
+		score -= 10
+	}
+	if contributors < 2 {
+		score -= 15
+	}
+	if lastCommitDays > 7 {
+		score -= 10
+	}
+	if score > 100 {
+		score = 100
+	}
+
+	rating := "Healthy"
+	if score < 70 {
+		rating = "Warning"
+	}
+	if score < 50 {
+		rating = "Critical"
+	}
+
+	var sb strings.Builder
+	sb.WriteString("# Repository Health Report\n\n")
+	sb.WriteString("## Summary\n\n")
+	sb.WriteString(fmt.Sprintf("**Health Score: %d/100** (%s)\n\n", score, rating))
+	sb.WriteString("## Metrics\n\n")
+	sb.WriteString("| Metric | Value | Status |\n")
+	sb.WriteString("|--------|-------|--------|\n")
+	sb.WriteString(fmt.Sprintf("| Commits (30d) | %d | %s |\n", commits, statusIndicator(commits > 10)))
+	sb.WriteString(fmt.Sprintf("| Open Issues | %d | %s |\n", openIssues, statusIndicator(openIssues < 20)))
+	sb.WriteString(fmt.Sprintf("| Contributors | %d | %s |\n", contributors, statusIndicator(contributors >= 2)))
+	sb.WriteString(fmt.Sprintf("| Days Since Last Commit | %d | %s |\n", lastCommitDays, statusIndicator(lastCommitDays < 7)))
+	sb.WriteString(fmt.Sprintf("| Stars | %d | %s |\n", stars, statusIndicator(stars > 10)))
+	if avgPRAge, ok := metrics["avg_pr_age_days"]; ok {
+		sb.WriteString(fmt.Sprintf("| Avg PR Age (days) | %s | %s |\n", avgPRAge, statusIndicator(true)))
+	}
+	sb.WriteString("\n")
+
+	if readmeContent != "" {
+		headingCount := 0
+		for _, line := range strings.Split(readmeContent, "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "#") {
+				headingCount++
+			}
+		}
+		sb.WriteString(fmt.Sprintf("## Documentation\n\nREADME has %d sections.\n\n", headingCount))
+	}
+
+	sb.WriteString("## Recommendations\n\n")
+	if commits < 10 {
+		sb.WriteString("- **Increase commit frequency**: Only %d commits in the last 30 days. Consider smaller, more frequent commits.\n")
+	}
+	if openIssues > 15 {
+		sb.WriteString("- **Triage open issues**: There are many open issues. Prioritize and close stale ones.\n")
+	}
+	if contributors < 3 {
+		sb.WriteString("- **Expand contributor base**: Only a few active contributors. Consider onboarding new team members.\n")
+	}
+	if lastCommitDays > 3 {
+		sb.WriteString(fmt.Sprintf("- **Resume active development**: Last commit was %d days ago.\n", lastCommitDays))
+	}
+	sb.WriteString("- **Maintain test coverage**: Ensure all new code is tested.\n")
+	sb.WriteString("- **Review and merge open PRs**: Keep PR age low for faster iteration.\n")
+
+	return sb.String()
+}
+
+func statusIndicator(healthy bool) string {
+	if healthy {
+		return "Healthy"
+	}
+	return "Warning"
 }
 
 // csvToMarkdownTable converts CSV content to a markdown table.

@@ -111,7 +111,7 @@ Create these as Tasks with dependencies. T1-T3 and T5 can run in parallel.
 | T7 | Demo 03 — both success and failure paths | T6 |
 | T8 | Review: verify Phase 3 against docs/architecture.md | T7 |
 
-### Phase 4: Agent Mode + Inspector
+### Phase 4: Agent Mode + Inspector ✅ COMPLETE
 
 T1-T5 (protocol) and T6-T8 (inspector) can run in parallel.
 

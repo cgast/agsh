@@ -1,0 +1,45 @@
+apiVersion: agsh/v1
+kind: ProjectSpec
+
+meta:
+  name: "file-health-check"
+  description: "Analyze workspace files and produce a health report"
+  author: "demo"
+  created: "2025-02-09"
+  tags: ["demo", "agent", "autonomy", "local"]
+
+goal: |
+  Perform a health check on the workspace directory. Read all files,
+  analyze their contents, compute health metrics, and write a structured
+  report with a score and recommendations.
+
+constraints:
+  - "Read-only access to workspace files (only write the report)"
+  - "Must complete within 30 seconds"
+
+guidelines:
+  - "Include a Health Score section"
+  - "Include Recommendations"
+  - "List all files analyzed"
+
+success_criteria:
+  - type: "not_empty"
+    target: "output"
+    message: "Report must not be empty"
+  - type: "contains"
+    target: "output"
+    expected: "Health Score"
+    message: "Report must include a health score"
+  - type: "contains"
+    target: "output"
+    expected: "Recommendation"
+    message: "Report must include recommendations"
+
+allowed_commands:
+  - "fs:*"
+
+output:
+  path: "./reports/health-report.md"
+  format: "markdown"
+
+params: []

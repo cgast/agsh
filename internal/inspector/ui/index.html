@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>agsh Inspector</title>
+<style>
+  :root {
+    --bg: #1a1b26; --bg2: #24283b; --fg: #c0caf5; --accent: #7aa2f7;
+    --green: #9ece6a; --yellow: #e0af68; --red: #f7768e; --gray: #565f89;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'SF Mono', 'Fira Code', monospace; background: var(--bg); color: var(--fg); font-size: 14px; }
+  .app { display: flex; height: 100vh; }
+  .sidebar { width: 180px; background: var(--bg2); padding: 16px; border-right: 1px solid #333; flex-shrink: 0; }
+  .sidebar h1 { font-size: 16px; color: var(--accent); margin-bottom: 16px; }
+  .sidebar a { display: block; color: var(--fg); text-decoration: none; padding: 8px; border-radius: 4px; margin-bottom: 4px; cursor: pointer; }
+  .sidebar a:hover, .sidebar a.active { background: var(--bg); color: var(--accent); }
+  .main { flex: 1; overflow-y: auto; padding: 24px; }
+  .status-bar { display: flex; gap: 16px; margin-bottom: 16px; padding: 12px; background: var(--bg2); border-radius: 8px; }
+  .status-bar .stat { text-align: center; }
+  .status-bar .stat .label { font-size: 11px; color: var(--gray); text-transform: uppercase; }
+  .status-bar .stat .value { font-size: 20px; font-weight: bold; color: var(--accent); }
+  .live-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--green); margin-right: 4px; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+  .card { background: var(--bg2); border-radius: 8px; padding: 16px; margin-bottom: 12px; }
+  .card h3 { color: var(--accent); margin-bottom: 8px; font-size: 13px; text-transform: uppercase; }
+  .event { padding: 6px 8px; border-bottom: 1px solid #2a2d3d; font-size: 13px; display: flex; gap: 12px; }
+  .event .time { color: var(--gray); min-width: 80px; }
+  .event .type { min-width: 140px; font-weight: bold; }
+  .event .type.command { color: var(--accent); }
+  .event .type.verify { color: var(--green); }
+  .event .type.error { color: var(--red); }
+  .event .type.pipeline { color: var(--yellow); }
+  .event .type.checkpoint { color: #bb9af7; }
+  .event .data { color: var(--gray); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ctx-scope { margin-bottom: 12px; }
+  .ctx-scope h4 { color: var(--yellow); margin-bottom: 4px; border-bottom: 1px solid #333; padding-bottom: 4px; }
+  .ctx-item { display: flex; gap: 12px; padding: 3px 0; font-size: 13px; }
+  .ctx-item .key { color: var(--accent); min-width: 120px; }
+  .ctx-item .val { color: var(--fg); word-break: break-all; }
+  .cmd-item { display: flex; gap: 12px; padding: 6px 0; border-bottom: 1px solid #2a2d3d; }
+  .cmd-item .name { color: var(--accent); min-width: 160px; font-weight: bold; }
+  .cmd-item .ns { color: var(--gray); min-width: 60px; }
+  .hidden { display: none; }
+  .btn { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 13px; }
+  .btn-approve { background: var(--green); color: #1a1b26; }
+  .btn-reject { background: var(--red); color: #fff; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="sidebar">
+    <h1>agsh Inspector</h1>
+    <a class="active" data-view="dashboard">Dashboard</a>
+    <a data-view="stream">Event Stream</a>
+    <a data-view="context">Context</a>
+    <a data-view="commands">Commands</a>
+    <a data-view="checkpoints">Checkpoints</a>
+  </div>
+  <div class="main">
+    <!-- Dashboard -->
+    <div id="view-dashboard">
+      <div class="status-bar">
+        <div class="stat"><div class="label"><span class="live-dot"></span>Status</div><div class="value" id="stat-status">Live</div></div>
+        <div class="stat"><div class="label">Events</div><div class="value" id="stat-events">0</div></div>
+        <div class="stat"><div class="label">Commands</div><div class="value" id="stat-commands">0</div></div>
+        <div class="stat"><div class="label">Errors</div><div class="value" id="stat-errors">0</div></div>
+        <div class="stat"><div class="label">Uptime</div><div class="value" id="stat-uptime">-</div></div>
+      </div>
+      <div class="card"><h3>Recent Events</h3><div id="recent-events"></div></div>
+    </div>
+    <!-- Stream -->
+    <div id="view-stream" class="hidden">
+      <div class="card"><h3>Event Stream</h3><div id="event-stream"></div></div>
+    </div>
+    <!-- Context -->
+    <div id="view-context" class="hidden">
+      <div class="card"><h3>Context Explorer</h3><div id="context-data">Loading...</div></div>
+    </div>
+    <!-- Commands -->
+    <div id="view-commands" class="hidden">
+      <div class="card"><h3>Available Commands</h3><div id="commands-list">Loading...</div></div>
+    </div>
+    <!-- Checkpoints -->
+    <div id="view-checkpoints" class="hidden">
+      <div class="card"><h3>Checkpoints</h3><div id="checkpoints-list">Loading...</div></div>
+    </div>
+  </div>
+</div>
+<script>
+(function() {
+  let eventCount = 0, commandCount = 0, errorCount = 0;
+  const allEvents = [];
+
+  // Navigation
+  document.querySelectorAll('.sidebar a').forEach(a => {
+    a.addEventListener('click', () => {
+      document.querySelectorAll('.sidebar a').forEach(x => x.classList.remove('active'));
+      a.classList.add('active');
+      document.querySelectorAll('.main > div').forEach(v => v.classList.add('hidden'));
+      document.getElementById('view-' + a.dataset.view).classList.remove('hidden');
+      if (a.dataset.view === 'context') loadContext();
+      if (a.dataset.view === 'commands') loadCommands();
+      if (a.dataset.view === 'checkpoints') loadCheckpoints();
+    });
+  });
+
+  function addEvent(ev) {
+    allEvents.push(ev);
+    eventCount++;
+    if (ev.type && ev.type.startsWith('command.end')) commandCount++;
+    if (ev.type && ev.type.includes('error')) errorCount++;
+    updateStats();
+    renderEvent(ev, 'event-stream');
+    if (allEvents.length <= 20) renderEvent(ev, 'recent-events');
+  }
+
+  function renderEvent(ev, containerId) {
+    const el = document.createElement('div');
+    el.className = 'event';
+    const ts = ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString() : '';
+    const typeClass = (ev.type || '').split('.')[0];
+    const dataStr = ev.data ? JSON.stringify(ev.data) : '';
+    el.innerHTML = '<span class="time">' + ts + '</span>' +
+      '<span class="type ' + typeClass + '">' + (ev.type || '') + '</span>' +
+      '<span class="data">' + escapeHtml(dataStr) + '</span>';
+    document.getElementById(containerId).appendChild(el);
+  }
+
+  function updateStats() {
+    document.getElementById('stat-events').textContent = eventCount;
+    document.getElementById('stat-commands').textContent = commandCount;
+    document.getElementById('stat-errors').textContent = errorCount;
+  }
+
+  // SSE connection
+  const evtSource = new EventSource('/ws');
+  evtSource.onmessage = function(e) {
+    try { addEvent(JSON.parse(e.data)); } catch(err) {}
+  };
+  evtSource.onerror = function() {
+    document.getElementById('stat-status').textContent = 'Disconnected';
+  };
+
+  // Fetch status periodically
+  setInterval(() => {
+    fetch('/api/status').then(r => r.json()).then(d => {
+      document.getElementById('stat-uptime').textContent = d.uptime || '-';
+    }).catch(() => {});
+  }, 5000);
+
+  function loadContext() {
+    fetch('/api/context').then(r => r.json()).then(data => {
+      let html = '';
+      for (const [scope, items] of Object.entries(data)) {
+        html += '<div class="ctx-scope"><h4>' + scope + '</h4>';
+        for (const [key, val] of Object.entries(items)) {
+          html += '<div class="ctx-item"><span class="key">' + escapeHtml(key) +
+            '</span><span class="val">' + escapeHtml(JSON.stringify(val)) + '</span></div>';
+        }
+        html += '</div>';
+      }
+      document.getElementById('context-data').innerHTML = html || '<em>No context data</em>';
+    });
+  }
+
+  function loadCommands() {
+    fetch('/api/commands').then(r => r.json()).then(cmds => {
+      let html = '';
+      cmds.forEach(c => {
+        html += '<div class="cmd-item"><span class="name">' + escapeHtml(c.name) +
+          '</span><span class="ns">[' + escapeHtml(c.namespace) + ']</span><span>' +
+          escapeHtml(c.description) + '</span></div>';
+      });
+      document.getElementById('commands-list').innerHTML = html || '<em>No commands</em>';
+    });
+  }
+
+  function loadCheckpoints() {
+    fetch('/api/checkpoints').then(r => r.json()).then(cps => {
+      let html = '';
+      if (!cps || cps.length === 0) { html = '<em>No checkpoints</em>'; }
+      else {
+        cps.forEach(cp => {
+          html += '<div class="cmd-item"><span class="name">' + escapeHtml(cp.name) +
+            '</span><span>' + new Date(cp.timestamp).toLocaleString() + '</span></div>';
+        });
+      }
+      document.getElementById('checkpoints-list').innerHTML = html;
+    });
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+})();
+</script>
+</body>
+</html>
