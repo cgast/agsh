@@ -1,0 +1,58 @@
+apiVersion: agsh/v1
+kind: ProjectSpec
+
+meta:
+  name: "github-weekly-report"
+  description: "Generate a weekly summary of GitHub activity across repos"
+  author: "example"
+  created: "2025-02-09"
+  tags: ["example", "github", "reporting", "weekly"]
+
+goal: |
+  Generate a markdown report summarizing all GitHub activity across the
+  authenticated user's repositories for the past 7 days. The report
+  should be useful for a weekly standup or status update.
+
+constraints:
+  - "Only include repos owned by the authenticated user"
+  - "Do not create, modify, or delete any GitHub resources"
+  - "Output must be a single markdown file"
+  - "Must complete within 60 seconds"
+
+guidelines:
+  - "Group activity by repository, then by type (PRs, issues, commits)"
+  - "Keep summaries to 1-2 sentences per item"
+  - "Include links to relevant GitHub pages"
+  - "Flag any PRs open longer than 7 days"
+
+success_criteria:
+  - type: "not_empty"
+    target: "output"
+    message: "Report must not be empty"
+  - type: "contains"
+    target: "output"
+    expected: "## "
+    message: "Report must contain markdown headers"
+  - type: "contains"
+    target: "output"
+    expected: "github.com"
+    message: "Report must contain GitHub links"
+
+allowed_commands:
+  - "github:*"
+  - "fs:write"
+  - "http:get"
+
+output:
+  path: "./reports/weekly-{{date}}.md"
+  format: "markdown"
+
+params:
+  - name: "date_range_days"
+    type: "integer"
+    default: 7
+    description: "How many days back to look"
+  - name: "repos"
+    type: "string[]"
+    default: []
+    description: "Specific repos to include (empty = all owned repos)"

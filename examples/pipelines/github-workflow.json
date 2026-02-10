@@ -1,0 +1,39 @@
+{
+  "description": "GitHub workflow: fetch repo info, list PRs, write report",
+  "steps": [
+    {
+      "command": "github:repo:info",
+      "args": {
+        "owner": "cgast",
+        "repo": "agsh"
+      },
+      "intent": "Get repository metadata",
+      "verify": [
+        {"type": "not_empty", "target": "output"}
+      ]
+    },
+    {
+      "command": "github:pr:list",
+      "args": {
+        "owner": "cgast",
+        "repo": "agsh",
+        "state": "open"
+      },
+      "intent": "List open pull requests"
+    },
+    {
+      "command": "fs:write",
+      "args": {
+        "path": "./reports/github-report.md",
+        "content": "{{generated_report}}"
+      },
+      "intent": "Write the generated report",
+      "checkpoint_before": true,
+      "verify": [
+        {"type": "not_empty", "target": "output"},
+        {"type": "contains", "target": "output", "expected": "github.com"}
+      ]
+    }
+  ],
+  "notes": "Requires GITHUB_TOKEN in .agsh/platforms.yaml"
+}

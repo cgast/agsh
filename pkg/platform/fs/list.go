@@ -7,12 +7,15 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/cgast/agsh/internal/sandbox"
 	agshctx "github.com/cgast/agsh/pkg/context"
 	"github.com/cgast/agsh/pkg/platform"
 )
 
 // ListCommand implements fs:list — lists files in a directory.
-type ListCommand struct{}
+type ListCommand struct {
+	Sandbox *sandbox.Sandbox
+}
 
 func (c *ListCommand) Name() string        { return "fs:list" }
 func (c *ListCommand) Description() string { return "List files in a directory" }
@@ -56,6 +59,12 @@ func (c *ListCommand) Execute(_ gocontext.Context, input agshctx.Envelope, _ ags
 	dir, err = filepath.Abs(dir)
 	if err != nil {
 		return agshctx.Envelope{}, fmt.Errorf("fs:list: resolve path: %w", err)
+	}
+
+	if c.Sandbox != nil {
+		if err := c.Sandbox.CheckPath(dir); err != nil {
+			return agshctx.Envelope{}, fmt.Errorf("fs:list: %w", err)
+		}
 	}
 
 	entries, err := os.ReadDir(dir)

@@ -1,6 +1,6 @@
 module github.com/cgast/agsh
 
-go 1.24.10
+go 1.24.7
 
 require (
 	github.com/google/go-github/v60 v60.0.0

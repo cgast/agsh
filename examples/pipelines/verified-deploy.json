@@ -1,0 +1,44 @@
+{
+  "description": "Verified deployment: read config, validate, deploy with checkpoint",
+  "steps": [
+    {
+      "command": "fs:read",
+      "args": ["./deploy-config.yaml"],
+      "intent": "Read the deployment configuration",
+      "verify": [
+        {"type": "not_empty", "target": "output"},
+        {"type": "contains", "target": "output", "expected": "version"}
+      ]
+    },
+    {
+      "command": "fs:read",
+      "args": ["./CHANGELOG.md"],
+      "intent": "Read the changelog for deployment notes",
+      "on_error": "skip"
+    },
+    {
+      "command": "http:get",
+      "args": {
+        "url": "https://httpbin.org/get"
+      },
+      "intent": "Verify external connectivity before deploy",
+      "verify": [
+        {"type": "not_empty", "target": "output"}
+      ]
+    },
+    {
+      "command": "fs:write",
+      "args": {
+        "path": "./deploy-log.md",
+        "content": "{{deploy_summary}}"
+      },
+      "intent": "Write deployment log",
+      "checkpoint_before": true,
+      "verify": [
+        {"type": "not_empty", "target": "output"},
+        {"type": "contains", "target": "output", "expected": "deploy"}
+      ]
+    }
+  ],
+  "notes": "Example of a multi-step pipeline with checkpointing and verification at each stage"
+}

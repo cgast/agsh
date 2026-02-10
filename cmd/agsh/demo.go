@@ -185,6 +185,287 @@ func runDemo01(workspaceDir, outputPath string) error {
 	return nil
 }
 
+// runDemo02 executes the GitHub report demo via the JSON-RPC protocol handler.
+// When GITHUB_TOKEN is not set, it generates a sample report with mock data
+// to demonstrate the pipeline flow, plan generation, and verification.
+func runDemo02(specPath string) error {
+	bus := events.NewMemoryBus()
+	registry := platform.NewRegistry()
+	registerCommands(registry, config.PlatformConfig{})
+
+	dbPath := filepath.Join(os.TempDir(), "agsh-demo02.db")
+	defer os.Remove(dbPath)
+
+	store, err := agshctx.NewBoltStore(dbPath)
+	if err != nil {
+		return fmt.Errorf("create store: %w", err)
+	}
+	defer store.Close()
+
+	publisher := &eventBusPublisher{bus: bus}
+
+	// Subscribe to events for observability.
+	ch := bus.Subscribe()
+	defer bus.Unsubscribe(ch)
+	go func() {
+		for ev := range ch {
+			fmt.Fprintf(os.Stderr, "[event] %s: %v\n", ev.Type, ev.Data)
+		}
+	}()
+
+	fmt.Fprintf(os.Stderr, "=== Demo 02: GitHub Weekly Report ===\n")
+	fmt.Fprintf(os.Stderr, "Spec: %s\n", specPath)
+
+	// Set up checkpoint manager.
+	cpDir := filepath.Join(os.TempDir(), "agsh-demo02-checkpoints")
+	cpMgr, err := verify.NewFileCheckpointManager(cpDir)
+	if err != nil {
+		return fmt.Errorf("create checkpoint manager: %w", err)
+	}
+
+	// Set up the protocol handler to demonstrate plan generation.
+	handler := protocol.NewHandler()
+	state := &agentState{}
+	registerCoreMethods(handler, registry, store, bus, cpMgr)
+	registerProjectMethods(handler, registry, store, bus, state, cpMgr)
+
+	reqID := 0
+	send := func(method string, params any) (json.RawMessage, error) {
+		reqID++
+		var rawParams json.RawMessage
+		if params != nil {
+			b, err := json.Marshal(params)
+			if err != nil {
+				return nil, fmt.Errorf("marshal params: %w", err)
+			}
+			rawParams = b
+		}
+
+		req := protocol.Request{
+			JSONRPC: "2.0",
+			ID:      reqID,
+			Method:  method,
+			Params:  rawParams,
+		}
+
+		fmt.Fprintf(os.Stderr, "Agent -> %s", method)
+		if rawParams != nil {
+			compact := string(rawParams)
+			if len(compact) > 80 {
+				compact = compact[:77] + "..."
+			}
+			fmt.Fprintf(os.Stderr, " %s", compact)
+		}
+		fmt.Fprintf(os.Stderr, "\n")
+
+		resp := handler.Handle(req)
+		if resp.Error != nil {
+			fmt.Fprintf(os.Stderr, "  <- ERROR [%d]: %s\n\n", resp.Error.Code, resp.Error.Message)
+			return nil, fmt.Errorf("%s: %s", method, resp.Error.Message)
+		}
+
+		resultJSON, _ := json.Marshal(resp.Result)
+		summary := string(resultJSON)
+		if len(summary) > 120 {
+			summary = summary[:117] + "..."
+		}
+		fmt.Fprintf(os.Stderr, "  <- %s\n\n", summary)
+		return resultJSON, nil
+	}
+
+	publisher.PublishPipelineEvent("pipeline.start", map[string]any{
+		"demo":       "02-github-report",
+		"step_count": 4,
+	}, 0, 0)
+
+	// Step 1: Discover available commands.
+	fmt.Fprintf(os.Stderr, "--- Phase 1: Command Discovery ---\n")
+	result, err := send(protocol.MethodCommandsList, nil)
+	if err != nil {
+		return err
+	}
+	var cmds []protocol.CommandInfo
+	json.Unmarshal(result, &cmds)
+	fmt.Fprintf(os.Stderr, "  Agent sees %d available commands\n\n", len(cmds))
+
+	// Step 2: Load the project spec.
+	fmt.Fprintf(os.Stderr, "--- Phase 2: Load Project Spec ---\n")
+	_, err = send(protocol.MethodProjectLoad, map[string]string{"path": specPath})
+	if err != nil {
+		return err
+	}
+
+	// Step 3: Generate a plan.
+	fmt.Fprintf(os.Stderr, "--- Phase 3: Generate Plan ---\n")
+	planResult, err := send(protocol.MethodProjectPlan, nil)
+	if err != nil {
+		return err
+	}
+	var planInfo map[string]any
+	json.Unmarshal(planResult, &planInfo)
+	fmt.Fprintf(os.Stderr, "  Plan generated, status: %v\n\n", planInfo["status"])
+
+	// Step 4: Reject auto-plan and generate report manually.
+	// In a real scenario with GITHUB_TOKEN, the agent would approve the plan
+	// and execute via github:repo:info and github:pr:list. Here we simulate
+	// with mock data to demonstrate the full pipeline flow.
+	fmt.Fprintf(os.Stderr, "--- Phase 4: Generate Report ---\n")
+	_, err = send(protocol.MethodProjectReject, map[string]string{
+		"feedback": "Agent will execute steps manually with mock data (no GitHub token).",
+	})
+	if err != nil {
+		return err
+	}
+
+	// Save checkpoint before generating report.
+	_, err = send(protocol.MethodCheckpointSave, map[string]string{"name": "pre-report"})
+	if err != nil {
+		return err
+	}
+
+	// Generate the mock GitHub report.
+	report := generateMockGitHubReport()
+
+	// Store report data in context for inspection.
+	send(protocol.MethodContextSet, map[string]any{
+		"scope": "session",
+		"key":   "report_content",
+		"value": report,
+	})
+
+	// Write the report.
+	demoDir := filepath.Dir(specPath)
+	if demoDir == "." {
+		demoDir = "./examples/demo/02-github-report"
+	}
+	reportPath := filepath.Join(demoDir, "reports", "weekly-report.md")
+
+	_, err = send(protocol.MethodExecute, map[string]any{
+		"command": "fs:write",
+		"args": map[string]any{
+			"path":    reportPath,
+			"content": report,
+		},
+		"intent": "Write the weekly GitHub report",
+		"verify": []map[string]any{
+			{"type": "not_empty", "target": "output"},
+		},
+	})
+	if err != nil {
+		return err
+	}
+
+	// Step 5: Verify the report against spec's success criteria.
+	fmt.Fprintf(os.Stderr, "--- Phase 5: Verify Report ---\n")
+
+	intent := verify.Intent{
+		Description: "Verify GitHub weekly report",
+		Assertions: []verify.Assertion{
+			{Type: "not_empty", Target: "output", Message: "Report must not be empty"},
+			{Type: "contains", Target: "output", Expected: "## ", Message: "Report must contain markdown section headers"},
+			{Type: "contains", Target: "output", Expected: "github.com", Message: "Report must contain GitHub links"},
+		},
+	}
+
+	outputEnvelope := agshctx.NewEnvelope(report, "text/markdown", "demo")
+	engine := verify.NewEngine()
+	vResult, err := engine.Verify(outputEnvelope, intent)
+	if err != nil {
+		return fmt.Errorf("verification error: %w", err)
+	}
+
+	publisher.PublishPipelineEvent("verify.result", map[string]any{
+		"passed":     vResult.Passed,
+		"assertions": len(vResult.Results),
+	}, 4, 0)
+
+	fmt.Fprintf(os.Stderr, "\n=== Verification Results ===\n")
+	for _, ar := range vResult.Results {
+		status := "PASS"
+		if !ar.Passed {
+			status = "FAIL"
+		}
+		fmt.Fprintf(os.Stderr, "  [%s] %s: %s\n", status, ar.Assertion.Type, ar.Message)
+	}
+
+	if !vResult.Passed {
+		passed := 0
+		for _, ar := range vResult.Results {
+			if ar.Passed {
+				passed++
+			}
+		}
+		return fmt.Errorf("verification failed: %d/%d assertions passed", passed, len(vResult.Results))
+	}
+
+	fmt.Fprintf(os.Stderr, "\nAll %d assertions passed.\n", len(vResult.Results))
+
+	publisher.PublishPipelineEvent("pipeline.end", map[string]any{
+		"success": true,
+	}, 4, 0)
+
+	fmt.Fprintf(os.Stderr, "\n=== Output ===\n")
+	fmt.Print(report)
+	fmt.Fprintf(os.Stderr, "\nWritten to: %s\n", reportPath)
+	fmt.Fprintf(os.Stderr, "=== Demo 02 Complete ===\n")
+
+	return nil
+}
+
+// generateMockGitHubReport produces a sample weekly GitHub report
+// using realistic mock data. This allows Demo 02 to run without
+// a real GitHub token while demonstrating the full pipeline flow.
+func generateMockGitHubReport() string {
+	var sb strings.Builder
+
+	sb.WriteString("# Weekly GitHub Report\n\n")
+	sb.WriteString("**Period:** 2025-02-02 — 2025-02-09\n\n")
+
+	// Repo 1: cgast/agsh
+	sb.WriteString("## cgast/agsh\n\n")
+	sb.WriteString("### Pull Requests\n")
+	sb.WriteString("- **#12** feat: add verification engine (opened 2025-02-07) — [view](https://github.com/cgast/agsh/pull/12)\n")
+	sb.WriteString("- **#11** fix: pipeline error handling (merged 2025-02-05) — [view](https://github.com/cgast/agsh/pull/11)\n")
+	sb.WriteString("- **#10** refactor: context store scoping (merged 2025-02-03) — [view](https://github.com/cgast/agsh/pull/10)\n")
+	sb.WriteString("\n### Issues\n")
+	sb.WriteString("- **#15** Support custom assertion types (opened 2025-02-08) — [view](https://github.com/cgast/agsh/issues/15)\n")
+	sb.WriteString("- **#14** Add checkpoint diff command (opened 2025-02-06) — [view](https://github.com/cgast/agsh/issues/14)\n")
+	sb.WriteString("- **#13** Pipeline timeout handling (closed 2025-02-04) — [view](https://github.com/cgast/agsh/issues/13)\n")
+	sb.WriteString("\n---\n\n")
+
+	// Repo 2: cgast/web-tools
+	sb.WriteString("## cgast/web-tools\n\n")
+	sb.WriteString("### Pull Requests\n")
+	sb.WriteString("- **#45** feat: add dark mode toggle (merged 2025-02-06) — [view](https://github.com/cgast/web-tools/pull/45)\n")
+	sb.WriteString("- **#44** fix: responsive layout on mobile (open since 2025-01-28, **>7 days**) — [view](https://github.com/cgast/web-tools/pull/44)\n")
+	sb.WriteString("\n### Issues\n")
+	sb.WriteString("- **#50** Performance regression in search (opened 2025-02-07) — [view](https://github.com/cgast/web-tools/issues/50)\n")
+	sb.WriteString("\n---\n\n")
+
+	// Repo 3: cgast/data-pipeline
+	sb.WriteString("## cgast/data-pipeline\n\n")
+	sb.WriteString("### Pull Requests\n")
+	sb.WriteString("- **#8** feat: add S3 output sink (opened 2025-02-08) — [view](https://github.com/cgast/data-pipeline/pull/8)\n")
+	sb.WriteString("\n### Issues\n")
+	sb.WriteString("- **#12** OOM on large CSV files (opened 2025-02-05) — [view](https://github.com/cgast/data-pipeline/issues/12)\n")
+	sb.WriteString("- **#11** Support Parquet format (closed 2025-02-02) — [view](https://github.com/cgast/data-pipeline/issues/11)\n")
+	sb.WriteString("\n---\n\n")
+
+	sb.WriteString("## Summary\n\n")
+	sb.WriteString("| Metric | Count |\n")
+	sb.WriteString("|--------|-------|\n")
+	sb.WriteString("| Active Repos | 3 |\n")
+	sb.WriteString("| PRs Opened | 3 |\n")
+	sb.WriteString("| PRs Merged | 3 |\n")
+	sb.WriteString("| Issues Opened | 4 |\n")
+	sb.WriteString("| Issues Closed | 2 |\n")
+	sb.WriteString("| Stale PRs (>7d) | 1 |\n")
+	sb.WriteString("\n")
+	sb.WriteString("*Generated by agsh on 2025-02-09*\n")
+
+	return sb.String()
+}
+
 // runDemo03 executes the verified-transform demo: CSV → markdown table with verification.
 func runDemo03(inputCSV string) error {
 	bus := events.NewMemoryBus()
