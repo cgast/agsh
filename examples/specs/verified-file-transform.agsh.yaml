@@ -1,0 +1,59 @@
+apiVersion: agsh/v1
+kind: ProjectSpec
+
+meta:
+  name: "verified-file-transform"
+  description: "Transform a data file with verification and rollback support"
+  author: "example"
+  created: "2025-02-09"
+  tags: ["example", "verification", "transform", "checkpoint"]
+
+goal: |
+  Read an input data file, transform it into a specified output format,
+  verify the transformation meets structural and quality requirements,
+  and write the result. Roll back on verification failure.
+
+constraints:
+  - "Preserve all data from the original file — no rows may be lost"
+  - "Output must be valid in the target format"
+  - "Save a checkpoint before any write operation"
+
+guidelines:
+  - "Validate input data before transformation"
+  - "Use consistent formatting in the output"
+  - "Include summary statistics where appropriate"
+
+success_criteria:
+  - type: "not_empty"
+    target: "output"
+    message: "Output must not be empty"
+  - type: "contains"
+    target: "output"
+    expected: "|"
+    message: "Output must contain table formatting"
+  - type: "count_gte"
+    target: "output.lines"
+    expected: 5
+    message: "Output must have at least 5 lines"
+  - type: "not_contains"
+    target: "output"
+    expected: ",,,"
+    message: "Output must not contain raw CSV artifacts"
+
+allowed_commands:
+  - "fs:read"
+  - "fs:write"
+
+output:
+  path: "./output.md"
+  format: "markdown"
+
+params:
+  - name: "input_file"
+    type: "string"
+    default: "./data.csv"
+    description: "Path to the input data file"
+  - name: "sort_column"
+    type: "string"
+    default: ""
+    description: "Column name to sort by (empty = first column)"

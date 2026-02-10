@@ -9,6 +9,7 @@ import (
 
 	"github.com/cgast/agsh/internal/config"
 	"github.com/cgast/agsh/internal/inspector"
+	"github.com/cgast/agsh/internal/sandbox"
 	agshctx "github.com/cgast/agsh/pkg/context"
 	"github.com/cgast/agsh/pkg/events"
 	"github.com/cgast/agsh/pkg/platform"
@@ -63,7 +64,21 @@ func main() {
 	// Initialize core components.
 	bus := events.NewMemoryBus()
 	registry := platform.NewRegistry()
-	registerCommands(registry, platCfg)
+
+	// Create sandbox from config for filesystem enforcement.
+	var sb *sandbox.Sandbox
+	if len(cfg.Sandbox.AllowedPaths) > 0 || len(cfg.Sandbox.DeniedPaths) > 0 || cfg.Sandbox.MaxFileSize != "" {
+		var err error
+		sb, err = sandbox.New(sandbox.Config{
+			AllowedPaths: cfg.Sandbox.AllowedPaths,
+			DeniedPaths:  cfg.Sandbox.DeniedPaths,
+			MaxFileSize:  cfg.Sandbox.MaxFileSize,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: sandbox init: %v\n", err)
+		}
+	}
+	registerCommandsSandboxed(registry, platCfg, sb)
 
 	// Initialize context store.
 	dbPath := contextStorePath()
@@ -108,6 +123,7 @@ func handleDemo() error {
 	if len(os.Args) < 3 {
 		fmt.Println("Usage: agsh demo <number> [args...]")
 		fmt.Println("  agsh demo 01 [workspace-dir] [output-path]")
+		fmt.Println("  agsh demo 02 [spec-path]")
 		fmt.Println("  agsh demo 03 [input-csv]")
 		fmt.Println("  agsh demo 04 [spec-path]")
 		return nil
@@ -123,6 +139,12 @@ func handleDemo() error {
 			outputPath = os.Args[4]
 		}
 		return runDemo01(workspaceDir, outputPath)
+	case "02":
+		specPath := "./examples/demo/02-github-report/project.agsh.yaml"
+		if len(os.Args) >= 4 {
+			specPath = os.Args[3]
+		}
+		return runDemo02(specPath)
 	case "03":
 		inputCSV := "./examples/demo/03-verified-transform/workspace/team.csv"
 		if len(os.Args) >= 4 {
@@ -169,10 +191,14 @@ func detectMode() string {
 }
 
 func registerCommands(registry *platform.Registry, platCfg config.PlatformConfig) {
-	// Built-in filesystem commands.
-	registry.Register(&fs.ListCommand{})
-	registry.Register(&fs.ReadCommand{})
-	registry.Register(&fs.WriteCommand{})
+	registerCommandsSandboxed(registry, platCfg, nil)
+}
+
+func registerCommandsSandboxed(registry *platform.Registry, platCfg config.PlatformConfig, sb *sandbox.Sandbox) {
+	// Built-in filesystem commands with optional sandbox enforcement.
+	registry.Register(&fs.ListCommand{Sandbox: sb})
+	registry.Register(&fs.ReadCommand{Sandbox: sb})
+	registry.Register(&fs.WriteCommand{Sandbox: sb})
 
 	// GitHub commands (only if token is configured).
 	if platCfg.GitHub.Token != "" {

@@ -6,12 +6,15 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/cgast/agsh/internal/sandbox"
 	agshctx "github.com/cgast/agsh/pkg/context"
 	"github.com/cgast/agsh/pkg/platform"
 )
 
 // WriteCommand implements fs:write — writes content to a file.
-type WriteCommand struct{}
+type WriteCommand struct {
+	Sandbox *sandbox.Sandbox
+}
 
 func (c *WriteCommand) Name() string        { return "fs:write" }
 func (c *WriteCommand) Description() string { return "Write content to a file" }
@@ -32,7 +35,7 @@ func (c *WriteCommand) OutputSchema() platform.Schema {
 	return platform.Schema{
 		Type: "object",
 		Properties: map[string]platform.SchemaField{
-			"path":         {Type: "string", Description: "Written file path"},
+			"path":          {Type: "string", Description: "Written file path"},
 			"bytes_written": {Type: "integer", Description: "Number of bytes written"},
 		},
 	}
@@ -49,6 +52,15 @@ func (c *WriteCommand) Execute(_ gocontext.Context, input agshctx.Envelope, _ ag
 	filePath, err = filepath.Abs(filePath)
 	if err != nil {
 		return agshctx.Envelope{}, fmt.Errorf("fs:write: resolve path: %w", err)
+	}
+
+	if c.Sandbox != nil {
+		if err := c.Sandbox.CheckPath(filePath); err != nil {
+			return agshctx.Envelope{}, fmt.Errorf("fs:write: %w", err)
+		}
+		if err := c.Sandbox.CheckFileSize(int64(len(content))); err != nil {
+			return agshctx.Envelope{}, fmt.Errorf("fs:write: %w", err)
+		}
 	}
 
 	// Ensure parent directory exists.

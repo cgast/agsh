@@ -6,12 +6,15 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/cgast/agsh/internal/sandbox"
 	agshctx "github.com/cgast/agsh/pkg/context"
 	"github.com/cgast/agsh/pkg/platform"
 )
 
 // ReadCommand implements fs:read — reads the contents of a file.
-type ReadCommand struct{}
+type ReadCommand struct {
+	Sandbox *sandbox.Sandbox
+}
 
 func (c *ReadCommand) Name() string        { return "fs:read" }
 func (c *ReadCommand) Description() string { return "Read file contents" }
@@ -47,6 +50,12 @@ func (c *ReadCommand) Execute(_ gocontext.Context, input agshctx.Envelope, _ ags
 	filePath, err = filepath.Abs(filePath)
 	if err != nil {
 		return agshctx.Envelope{}, fmt.Errorf("fs:read: resolve path: %w", err)
+	}
+
+	if c.Sandbox != nil {
+		if err := c.Sandbox.CheckPath(filePath); err != nil {
+			return agshctx.Envelope{}, fmt.Errorf("fs:read: %w", err)
+		}
 	}
 
 	data, err := os.ReadFile(filePath)

@@ -1,0 +1,44 @@
+apiVersion: agsh/v1
+kind: ProjectSpec
+
+meta:
+  name: "hello-world"
+  description: "Minimal spec that reads a file and writes a greeting"
+  author: "example"
+  created: "2025-02-09"
+  tags: ["example", "beginner", "filesystem"]
+
+goal: |
+  Read a text file from the workspace, extract the first line as a name,
+  and write a greeting message to the output file.
+
+constraints:
+  - "Only access files in the current directory"
+  - "Output must be a single text file"
+
+guidelines:
+  - "Use a friendly greeting tone"
+  - "Include the current date in the greeting"
+
+success_criteria:
+  - type: "not_empty"
+    target: "output"
+    message: "Greeting must not be empty"
+  - type: "contains"
+    target: "output"
+    expected: "Hello"
+    message: "Greeting must contain 'Hello'"
+
+allowed_commands:
+  - "fs:read"
+  - "fs:write"
+
+output:
+  path: "./greeting.txt"
+  format: "text"
+
+params:
+  - name: "input_file"
+    type: "string"
+    default: "./name.txt"
+    description: "Path to input file containing the name"
